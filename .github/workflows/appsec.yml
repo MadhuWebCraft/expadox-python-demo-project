@@ -1,0 +1,660 @@
+# ============================================================
+# ShieldFlow — AppSec Pipeline
+# Runs on every push and pull request to main/master.
+# Jobs: SAST → SCA → Secrets → DAST → Gate → SOAR ingest
+# ============================================================
+ 
+name: ShieldFlow AppSec Pipeline
+ 
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+ 
+# Cancel in-progress runs on the same branch to save minutes
+concurrency:
+  group: appsec-${{ github.ref }}
+  cancel-in-progress: true
+ 
+env:
+  # Severity threshold — findings at or above this level block the build
+  # Values: CRITICAL | HIGH | MEDIUM | LOW
+  BLOCK_SEVERITY: HIGH
+ 
+  # TheHive SOAR endpoint — set these in GitHub → Settings → Secrets
+  THEHIVE_URL: ${{ secrets.THEHIVE_URL }}          # e.g. http://your-server:9000
+  THEHIVE_API_KEY: ${{ secrets.THEHIVE_API_KEY }}
+ 
+  # Slack webhook for direct notifications (optional)
+  SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+ 
+# ============================================================
+# JOB 1 — SAST (Static Application Security Testing)
+# Tool: Semgrep
+# Output: semgrep.sarif  (uploaded to GitHub Security tab)
+# ============================================================
+jobs:
+  sast:
+    name: SAST — Semgrep
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # needed to upload SARIF
+      contents: read
+ 
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # full history needed for accurate blame
+ 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+ 
+      - name: Install Semgrep
+        run: pip install semgrep
+ 
+      # Run with the full auto ruleset — covers OWASP Top 10, secrets patterns,
+      # injection flaws, insecure deserialization, and more.
+      # --error exits non-zero on findings (we handle blocking in the gate job)
+      - name: Run Semgrep scan
+        run: |
+          semgrep ci \
+            --config auto \
+            --sarif \
+            --output semgrep.sarif \
+            --metrics=off \
+            || true          # don't fail here — gate job decides
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}   # optional: links to Semgrep Cloud
+ 
+      # Upload SARIF so findings appear in GitHub → Security → Code scanning
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: sast-semgrep
+ 
+      # Store raw SARIF for the gate job and SOAR connector
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sarif-sast
+          path: semgrep.sarif
+          retention-days: 30
+ 
+# ============================================================
+# JOB 2 — SCA (Software Composition Analysis)
+# Tool: Trivy
+# Scans: filesystem (lock files) + Docker image layers
+# Output: trivy.sarif
+# ============================================================
+  sca:
+    name: SCA — Trivy
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+ 
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+ 
+      # Scan the repo filesystem — reads package-lock.json, requirements.txt,
+      # go.sum, Gemfile.lock, etc. and checks against NVD + GitHub Advisory DB
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs.sarif
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: 0          # gate job handles blocking
+ 
+      # Also scan the Juice Shop Docker image if you're using it as your target
+      # Comment out if not using a container target
+      - name: Run Trivy image scan (Juice Shop)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: bkimminich/juice-shop:latest
+          format: sarif
+          output: trivy-image.sarif
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          exit-code: 0
+ 
+      # Merge both SARIF files into one for the gate and SOAR
+      - name: Merge Trivy SARIF files
+        run: |
+          pip install sarif-tools --quiet
+          python - <<'EOF'
+          import json, glob
+ 
+          merged = {"version": "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json", "runs": []}
+          for f in glob.glob("trivy-*.sarif"):
+              with open(f) as fh:
+                  data = json.load(fh)
+                  merged["runs"].extend(data.get("runs", []))
+          with open("trivy.sarif", "w") as fh:
+              json.dump(merged, fh, indent=2)
+          print(f"Merged {len(merged['runs'])} run(s) into trivy.sarif")
+          EOF
+ 
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+          category: sca-trivy
+ 
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sarif-sca
+          path: trivy.sarif
+          retention-days: 30
+ 
+# ============================================================
+# JOB 3 — Secrets Detection
+# Tool: Gitleaks
+# Scans the full git history, not just the latest commit
+# Output: gitleaks.sarif
+# ============================================================
+  secrets:
+    name: Secrets — Gitleaks
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+ 
+    steps:
+      - name: Checkout code (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # CRITICAL: scan entire git history
+ 
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}   # only needed for Gitleaks Pro
+        continue-on-error: true  # gate job handles blocking
+ 
+      # Gitleaks outputs gitleaks-report.json — convert to SARIF
+      - name: Convert Gitleaks report to SARIF
+        if: always()
+        run: |
+          pip install gitleaks-to-sarif --quiet 2>/dev/null || true
+ 
+          python - <<'EOF'
+          import json, os, hashlib
+ 
+          report_file = "gitleaks-report.json"
+          if not os.path.exists(report_file):
+              print("No gitleaks report found — writing empty SARIF")
+              sarif = {
+                  "version": "2.1.0",
+                  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                  "runs": [{"tool": {"driver": {"name": "Gitleaks", "rules": []}}, "results": []}]
+              }
+          else:
+              with open(report_file) as f:
+                  findings = json.load(f) or []
+ 
+              results = []
+              rules = {}
+              for finding in findings:
+                  rule_id = finding.get("RuleID", "secret-detected")
+                  rules[rule_id] = {
+                      "id": rule_id,
+                      "name": rule_id,
+                      "shortDescription": {"text": finding.get("Description", "Secret detected")},
+                      "defaultConfiguration": {"level": "error"},
+                      "properties": {"tags": ["security", "secret"]}
+                  }
+                  results.append({
+                      "ruleId": rule_id,
+                      "level": "error",
+                      "message": {"text": f"Possible secret: {finding.get('Description', '')} in commit {finding.get('Commit', 'unknown')[:8]}"},
+                      "locations": [{
+                          "physicalLocation": {
+                              "artifactLocation": {"uri": finding.get("File", "unknown"), "uriBaseId": "%SRCROOT%"},
+                              "region": {"startLine": finding.get("StartLine", 1)}
+                          }
+                      }]
+                  })
+ 
+              sarif = {
+                  "version": "2.1.0",
+                  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                  "runs": [{"tool": {"driver": {"name": "Gitleaks", "version": "8.x", "rules": list(rules.values())}}, "results": results}]
+              }
+              print(f"Converted {len(results)} Gitleaks finding(s) to SARIF")
+ 
+          with open("gitleaks.sarif", "w") as f:
+              json.dump(sarif, f, indent=2)
+          EOF
+ 
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gitleaks.sarif
+          category: secrets-gitleaks
+ 
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sarif-secrets
+          path: gitleaks.sarif
+          retention-days: 30
+ 
+# ============================================================
+# JOB 4 — DAST (Dynamic Application Security Testing)
+# Tool: OWASP ZAP baseline scan
+# Target: Juice Shop running in a Docker sidecar
+# Output: zap.sarif
+# ============================================================
+  dast:
+    name: DAST — OWASP ZAP
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+ 
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+ 
+      # Start Juice Shop as the target application
+      - name: Start Juice Shop target
+        run: |
+          docker pull bkimminich/juice-shop:latest
+          docker run -d \
+            --name juice-shop \
+            -p 3000:3000 \
+            bkimminich/juice-shop:latest
+          echo "Waiting for Juice Shop to be ready..."
+          timeout 60 bash -c 'until curl -sf http://localhost:3000 > /dev/null; do sleep 2; done'
+          echo "Juice Shop is up!"
+ 
+      # Baseline scan — passive only, no active attack (safe for shared envs)
+      # For a more thorough scan replace with zaproxy/action-full-scan
+      - name: Run ZAP baseline scan
+        uses: zaproxy/action-baseline-scan@v0.12.0
+        with:
+          target: http://localhost:3000
+          rules_file_name: .zap/rules.tsv    # optional: suppress known FPs
+          cmd_options: >
+            -J zap-report.json
+            -w zap-report.md
+          fail_action: false                  # gate job handles blocking
+          allow_issue_writing: false
+ 
+      # Convert ZAP JSON report to SARIF
+      - name: Convert ZAP report to SARIF
+        if: always()
+        run: |
+          python - <<'EOF'
+          import json, os
+ 
+          ZAP_SEVERITY = {"0": "note", "1": "warning", "2": "warning", "3": "error"}
+          ZAP_SEVERITY_NAME = {"0": "Informational", "1": "Low", "2": "Medium", "3": "High"}
+ 
+          report_file = "zap-report.json"
+          if not os.path.exists(report_file):
+              print("No ZAP report found — writing empty SARIF")
+              sarif = {
+                  "version": "2.1.0",
+                  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                  "runs": [{"tool": {"driver": {"name": "OWASP ZAP", "rules": []}}, "results": []}]
+              }
+          else:
+              with open(report_file) as f:
+                  zap = json.load(f)
+ 
+              results = []
+              rules = {}
+              for site in zap.get("site", []):
+                  for alert in site.get("alerts", []):
+                      rule_id = f"ZAP-{alert.get('pluginid', 'unknown')}"
+                      risk = alert.get("riskcode", "0")
+                      rules[rule_id] = {
+                          "id": rule_id,
+                          "name": alert.get("alert", "Unknown"),
+                          "shortDescription": {"text": alert.get("alert", "Unknown")},
+                          "fullDescription": {"text": alert.get("desc", "")},
+                          "helpUri": alert.get("reference", ""),
+                          "defaultConfiguration": {"level": ZAP_SEVERITY.get(risk, "note")},
+                          "properties": {"tags": ["security", "dast", "owasp"]}
+                      }
+                      for instance in alert.get("instances", []):
+                          uri = instance.get("uri", site.get("@name", "unknown"))
+                          results.append({
+                              "ruleId": rule_id,
+                              "level": ZAP_SEVERITY.get(risk, "note"),
+                              "message": {
+                                  "text": f"[{ZAP_SEVERITY_NAME.get(risk,'?')}] {alert.get('alert','')} — {instance.get('method','GET')} {uri}"
+                              },
+                              "locations": [{
+                                  "physicalLocation": {
+                                      "artifactLocation": {"uri": uri},
+                                      "region": {"startLine": 1}
+                                  }
+                              }]
+                          })
+ 
+              sarif = {
+                  "version": "2.1.0",
+                  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                  "runs": [{"tool": {"driver": {"name": "OWASP ZAP", "version": "latest", "rules": list(rules.values())}}, "results": results}]
+              }
+              print(f"Converted {len(results)} ZAP finding(s) to SARIF")
+ 
+          with open("zap.sarif", "w") as f:
+              json.dump(sarif, f, indent=2)
+          EOF
+ 
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: zap.sarif
+          category: dast-zap
+ 
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sarif-dast
+          path: zap.sarif
+          retention-days: 30
+ 
+      - name: Stop Juice Shop
+        if: always()
+        run: docker stop juice-shop && docker rm juice-shop
+ 
+# ============================================================
+# JOB 5 — Severity Gate
+# Reads all four SARIF outputs.
+# Exits 1 (blocks build) if any CRITICAL or HIGH finding exists.
+# ============================================================
+  gate:
+    name: Severity Gate
+    runs-on: ubuntu-latest
+    needs: [sast, sca, secrets, dast]
+    if: always()                # run even if a scanner job failed
+    outputs:
+      blocked: ${{ steps.gate.outputs.blocked }}
+      summary: ${{ steps.gate.outputs.summary }}
+ 
+    steps:
+      - name: Download all SARIF artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sarif-*
+          merge-multiple: true
+          path: sarif-reports/
+ 
+      - name: Evaluate severity gate
+        id: gate
+        run: |
+          python - <<'EOF'
+          import json, glob, os, sys
+ 
+          BLOCK_LEVEL = os.environ.get("BLOCK_SEVERITY", "HIGH")
+          BLOCK_LEVELS = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+          SARIF_TO_LEVEL = {"error": 3, "warning": 2, "note": 1, "none": 0}
+          # Map ruleId prefixes to scanner names for the summary
+          SCANNER_MAP = {"semgrep": "SAST", "ZAP": "DAST", "trivy": "SCA"}
+ 
+          threshold = BLOCK_LEVELS.get(BLOCK_LEVEL, 3)
+ 
+          files = glob.glob("sarif-reports/*.sarif")
+          print(f"Evaluating {len(files)} SARIF file(s): {files}")
+ 
+          blocking = []
+          counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "INFO": 0}
+ 
+          for fpath in files:
+              with open(fpath) as f:
+                  sarif = json.load(f)
+              for run in sarif.get("runs", []):
+                  tool = run.get("tool", {}).get("driver", {}).get("name", "unknown")
+                  rules = {r["id"]: r for r in run.get("tool", {}).get("driver", {}).get("rules", [])}
+                  for result in run.get("results", []):
+                      level = result.get("level", "note")
+                      rule_id = result.get("ruleId", "unknown")
+                      # Some SARIF files embed severity in rule defaultConfiguration
+                      rule = rules.get(rule_id, {})
+                      rule_level = rule.get("defaultConfiguration", {}).get("level", level)
+                      effective_level = max(SARIF_TO_LEVEL.get(level,0), SARIF_TO_LEVEL.get(rule_level,0))
+ 
+                      if effective_level >= 3:
+                          sev = "HIGH" if effective_level == 3 else "CRITICAL"
+                          counts[sev] += 1
+                          loc = result.get("locations", [{}])[0]
+                          uri = loc.get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "?")
+                          line = loc.get("physicalLocation", {}).get("region", {}).get("startLine", 1)
+                          msg = result.get("message", {}).get("text", "")[:120]
+                          blocking.append(f"  [{sev}] [{tool}] {rule_id} — {uri}:{line}\n    {msg}")
+                      elif effective_level == 2:
+                          counts["MEDIUM"] += 1
+                      elif effective_level == 1:
+                          counts["LOW"] += 1
+                      else:
+                          counts["INFO"] += 1
+ 
+          summary = (
+              f"Gate result | CRITICAL: {counts['CRITICAL']} | HIGH: {counts['HIGH']} | "
+              f"MEDIUM: {counts['MEDIUM']} | LOW: {counts['LOW']} | INFO: {counts['INFO']}"
+          )
+          print(summary)
+ 
+          # Write outputs for downstream jobs
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"summary={summary}\n")
+ 
+          if counts["CRITICAL"] + counts["HIGH"] > 0:
+              print(f"\n🚫 GATE BLOCKED — {counts['CRITICAL']} critical, {counts['HIGH']} high severity finding(s) detected:\n")
+              for b in blocking[:20]:   # cap output at 20 to keep logs readable
+                  print(b)
+              if len(blocking) > 20:
+                  print(f"  ... and {len(blocking)-20} more. See GitHub Security tab for full list.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write("blocked=true\n")
+              sys.exit(1)
+          else:
+              print(f"\n✅ GATE PASSED — no critical or high severity findings.")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write("blocked=false\n")
+          EOF
+        env:
+          BLOCK_SEVERITY: ${{ env.BLOCK_SEVERITY }}
+ 
+# ============================================================
+# JOB 6 — SOAR Ingestion Connector
+# Runs ALWAYS — even when the gate blocks the build.
+# Parses all SARIF files and POSTs each finding to TheHive.
+# Deduplication: hash(tool+ruleId+uri+line) → one case per finding.
+# ============================================================
+  soar-ingest:
+    name: SOAR — TheHive ingestion
+    runs-on: ubuntu-latest
+    needs: [gate]
+    if: always()                # critical: always run regardless of gate result
+    env:
+      GATE_BLOCKED: ${{ needs.gate.outputs.blocked }}
+      GATE_SUMMARY: ${{ needs.gate.outputs.summary }}
+ 
+    steps:
+      - name: Download all SARIF artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sarif-*
+          merge-multiple: true
+          path: sarif-reports/
+ 
+      - name: Install dependencies
+        run: pip install requests --quiet
+ 
+      - name: Post findings to TheHive
+        run: |
+          python - <<'EOF'
+          import json, glob, os, hashlib, requests, sys
+          from datetime import datetime
+ 
+          THEHIVE_URL = os.environ.get("THEHIVE_URL", "").rstrip("/")
+          THEHIVE_API_KEY = os.environ.get("THEHIVE_API_KEY", "")
+          SLACK_WEBHOOK = os.environ.get("SLACK_WEBHOOK_URL", "")
+          RUN_URL = f"{os.environ.get('GITHUB_SERVER_URL','')}/{os.environ.get('GITHUB_REPOSITORY','')}/actions/runs/{os.environ.get('GITHUB_RUN_ID','')}"
+          REPO = os.environ.get("GITHUB_REPOSITORY", "unknown")
+          COMMIT = os.environ.get("GITHUB_SHA", "unknown")[:8]
+          REF = os.environ.get("GITHUB_REF_NAME", "unknown")
+          GATE_BLOCKED = os.environ.get("GATE_BLOCKED", "false") == "true"
+          GATE_SUMMARY = os.environ.get("GATE_SUMMARY", "")
+ 
+          SARIF_SEVERITY = {"error": "High", "warning": "Medium", "note": "Low", "none": "Informational"}
+ 
+          if not THEHIVE_URL or not THEHIVE_API_KEY:
+              print("THEHIVE_URL or THEHIVE_API_KEY not set — skipping SOAR ingestion")
+              print("Set these in GitHub → Settings → Secrets and variables → Actions")
+              sys.exit(0)
+ 
+          headers = {
+              "Authorization": f"Bearer {THEHIVE_API_KEY}",
+              "Content-Type": "application/json"
+          }
+ 
+          def get_existing_alert_ids():
+              """Fetch all existing alert sourceRefs to deduplicate."""
+              try:
+                  resp = requests.post(
+                      f"{THEHIVE_URL}/api/v1/query",
+                      headers=headers,
+                      json={"query": [{"_name": "listAlert"}]},
+                      timeout=10
+                  )
+                  if resp.ok:
+                      return {a.get("sourceRef","") for a in resp.json()}
+              except Exception as e:
+                  print(f"Warning: could not fetch existing alerts: {e}")
+              return set()
+ 
+          def make_source_ref(tool, rule_id, uri, line):
+              """Stable deduplication key — same finding across reruns = same ref."""
+              raw = f"{REPO}:{tool}:{rule_id}:{uri}:{line}"
+              return hashlib.sha256(raw.encode()).hexdigest()[:32]
+ 
+          def post_alert(tool, rule_id, severity, title, description, uri, line, source_ref):
+              payload = {
+                  "type": "appsec-finding",
+                  "source": f"ShieldFlow/{tool}",
+                  "sourceRef": source_ref,
+                  "title": f"[{tool}] {title}",
+                  "description": (
+                      f"**Repository:** {REPO}\n"
+                      f"**Branch:** {REF} @ `{COMMIT}`\n"
+                      f"**Tool:** {tool}\n"
+                      f"**Rule:** {rule_id}\n"
+                      f"**File:** `{uri}` line {line}\n\n"
+                      f"---\n{description}\n\n"
+                      f"**CI Run:** {RUN_URL}\n"
+                      f"**Gate blocked build:** {'Yes 🚫' if GATE_BLOCKED else 'No ✅'}"
+                  ),
+                  "severity": {"Informational": 1, "Low": 1, "Medium": 2, "High": 3, "Critical": 3}.get(severity, 2),
+                  "tlp": 2,
+                  "tags": [tool, rule_id, REF, "shieldflow", "appsec"],
+                  "status": "New",
+                  "customFields": {
+                      "commit": {"string": COMMIT},
+                      "branch": {"string": REF},
+                      "ciRunUrl": {"string": RUN_URL},
+                      "gateBlocked": {"boolean": GATE_BLOCKED}
+                  }
+              }
+              resp = requests.post(f"{THEHIVE_URL}/api/v1/alert", headers=headers, json=payload, timeout=10)
+              return resp
+ 
+          # Parse all SARIF files and collect findings
+          files = glob.glob("sarif-reports/*.sarif")
+          existing_refs = get_existing_alert_ids()
+          posted, skipped, errors = 0, 0, 0
+ 
+          for fpath in files:
+              with open(fpath) as f:
+                  sarif = json.load(f)
+              for run in sarif.get("runs", []):
+                  tool = run.get("tool", {}).get("driver", {}).get("name", "Unknown")
+                  rules = {r["id"]: r for r in run.get("tool", {}).get("driver", {}).get("rules", [])}
+                  for result in run.get("results", []):
+                      level = result.get("level", "note")
+                      rule_id = result.get("ruleId", "unknown")
+                      rule = rules.get(rule_id, {})
+                      rule_level = rule.get("defaultConfiguration", {}).get("level", level)
+                      effective_level = max(level, rule_level, key=lambda l: {"error":3,"warning":2,"note":1,"none":0}.get(l,0))
+ 
+                      loc = result.get("locations", [{}])[0]
+                      uri = loc.get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "unknown")
+                      line = loc.get("physicalLocation", {}).get("region", {}).get("startLine", 1)
+                      msg = result.get("message", {}).get("text", "No description")
+                      rule_desc = rule.get("shortDescription", {}).get("text", rule_id)
+                      severity = SARIF_SEVERITY.get(effective_level, "Medium")
+                      source_ref = make_source_ref(tool, rule_id, uri, line)
+ 
+                      # Deduplication — skip if already in TheHive
+                      if source_ref in existing_refs:
+                          skipped += 1
+                          continue
+ 
+                      resp = post_alert(tool, rule_id, severity, rule_desc, msg, uri, line, source_ref)
+                      if resp.ok:
+                          posted += 1
+                          existing_refs.add(source_ref)   # prevent dupes within this run
+                      else:
+                          errors += 1
+                          print(f"  Error posting {source_ref}: {resp.status_code} {resp.text[:200]}")
+ 
+          print(f"\nSOAR ingestion complete: {posted} posted, {skipped} deduplicated, {errors} errors")
+ 
+          # Send Slack summary if webhook is configured
+          if SLACK_WEBHOOK:
+              icon = "🚫" if GATE_BLOCKED else "✅"
+              slack_payload = {
+                  "text": f"{icon} *ShieldFlow scan complete* — `{REPO}` @ `{REF}`",
+                  "blocks": [
+                      {"type": "section", "text": {"type": "mrkdwn",
+                          "text": f"{icon} *ShieldFlow AppSec scan complete*\n*Repo:* `{REPO}` *Branch:* `{REF}` *Commit:* `{COMMIT}`"}},
+                      {"type": "section", "text": {"type": "mrkdwn",
+                          "text": f"*Gate:* {'🚫 BLOCKED — deploy prevented' if GATE_BLOCKED else '✅ PASSED — deploy allowed'}\n*Summary:* {GATE_SUMMARY}"}},
+                      {"type": "section", "text": {"type": "mrkdwn",
+                          "text": f"*SOAR:* {posted} new findings ingested, {skipped} deduplicated\n<{RUN_URL}|View CI run →>"}},
+                  ]
+              }
+              try:
+                  r = requests.post(SLACK_WEBHOOK, json=slack_payload, timeout=5)
+                  print(f"Slack notification sent ({r.status_code})")
+              except Exception as e:
+                  print(f"Slack notification failed: {e}")
+          EOF
+        env:
+          THEHIVE_URL: ${{ env.THEHIVE_URL }}
+          THEHIVE_API_KEY: ${{ env.THEHIVE_API_KEY }}
+          SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GATE_BLOCKED: ${{ needs.gate.outputs.blocked }}
+          GATE_SUMMARY: ${{ needs.gate.outputs.summary }}
+ 
+# ============================================================
+# End of ShieldFlow appsec.yml
+# ============================================================
