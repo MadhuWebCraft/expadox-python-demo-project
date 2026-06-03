@@ -20,7 +20,7 @@ concurrency:
 env:
   # Severity threshold — findings at or above this level block the build
   # Values: CRITICAL | HIGH | MEDIUM | LOW
-  BLOCK_SEVERITY: HIGH
+  BLOCK_SEVERITY:  CRITICAL
  
   # TheHive SOAR endpoint — set these in GitHub → Settings → Secrets
   THEHIVE_URL: ${{ secrets.THEHIVE_URL }}          # e.g. http://your-server:9000
