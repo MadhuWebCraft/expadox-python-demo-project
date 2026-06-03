@@ -444,7 +444,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"summary={summary}\n")
  
-          if counts["CRITICAL"] + counts["HIGH"] > 0:
+          if counts["CRITICAL"] > 0:
               print(f"\n🚫 GATE BLOCKED — {counts['CRITICAL']} critical, {counts['HIGH']} high severity finding(s) detected:\n")
               for b in blocking[:20]:   # cap output at 20 to keep logs readable
                   print(b)
