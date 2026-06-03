@@ -128,21 +128,19 @@ jobs:
           exit-code: 0
  
       # Merge both SARIF files into one for the gate and SOAR
-      - name: Merge Trivy SARIF files
-        run: |
-          pip install sarif-tools --quiet
-          python - <<'EOF'
-          import json, glob
+      - name: Upload filesystem SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-filesystem
  
-          merged = {"version": "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json", "runs": []}
-          for f in glob.glob("trivy-*.sarif"):
-              with open(f) as fh:
-                  data = json.load(fh)
-                  merged["runs"].extend(data.get("runs", []))
-          with open("trivy.sarif", "w") as fh:
-              json.dump(merged, fh, indent=2)
-          print(f"Merged {len(merged['runs'])} run(s) into trivy.sarif")
-          EOF
+      - name: Upload image SARIF          
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+           sarif_file: trivy-image.sarif
+           category: trivy-image
  
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
@@ -156,8 +154,9 @@ jobs:
         if: always()
         with:
           name: sarif-sca
-          path: trivy.sarif
-          retention-days: 30
+          path:
+            trivy-fs.sarif
+            trivy-image.sarif
  
 # ============================================================
 # JOB 3 — Secrets Detection
