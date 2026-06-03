@@ -142,19 +142,12 @@ jobs:
            sarif_file: trivy-image.sarif
            category: trivy-image
  
-      - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy.sarif
-          category: sca-trivy
- 
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: sarif-sca
-          path:
+          path: |
             trivy-fs.sarif
             trivy-image.sarif
  
