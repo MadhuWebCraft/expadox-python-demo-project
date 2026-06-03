@@ -353,20 +353,11 @@ jobs:
               json.dump(sarif, f, indent=2)
           EOF
  
-      - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: zap.sarif
-          category: dast-zap
- 
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: sarif-dast
           path: zap.sarif
-          retention-days: 30
  
       - name: Stop Juice Shop
         if: always()
