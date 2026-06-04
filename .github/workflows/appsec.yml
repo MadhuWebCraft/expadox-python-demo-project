@@ -103,18 +103,20 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
- 
+
+      - name: Clean workspace
+        run: |
+           rm -f trivy-fs.sarif
+           rm -f trivy-image.sarif
       # Scan the repo filesystem — reads package-lock.json, requirements.txt,
       # go.sum, Gemfile.lock, etc. and checks against NVD + GitHub Advisory DB
-      - name: Clean old SARIF
-        run: rm -f trivy-fs.sarif
-        
+   
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
-          format: table
+          format: sarif
           output: trivy-fs.sarif
           severity: CRITICAL,HIGH,MEDIUM,LOW
           vuln-type: library,os
@@ -125,8 +127,8 @@ jobs:
 
       - name: Validate SARIF file
         run: |
-         echo "First 20 lines:"
-         head -20 trivy-fs.sarif
+         echo "Checking SARIF header..."
+         head -n 5 trivy-fs.sarif
          echo "Checking JSON validity..."
          python -m json.tool trivy-fs.sarif > /dev/null
          
@@ -143,7 +145,10 @@ jobs:
           format: sarif
           output: trivy-image.sarif
           severity: CRITICAL,HIGH,MEDIUM,LOW
+          vuln-type: os,library
+          ignore-unfixed: false
           exit-code: 0
+          cache: false
  
       # Merge both SARIF files into one for the gate and SOAR
       - name: Upload filesystem SARIF
