@@ -114,6 +114,8 @@ jobs:
           format: sarif
           output: trivy-fs.sarif
           severity: CRITICAL,HIGH,MEDIUM,LOW
+          vuln-type: library,os
+          ignore-unfixed: false
           exit-code: 0          # gate job handles blocking
  
       # Also scan the Juice Shop Docker image if you're using it as your target
