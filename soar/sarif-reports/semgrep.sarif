@@ -1,1 +1,36 @@
 
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Semgrep",
+          "rules": [
+            {
+              "id": "python.lang.security.audit.sqli.sqlalchemy-execute-raw-query",
+              "shortDescription": { "text": "SQL injection via raw query" },
+              "defaultConfiguration": { "level": "error" },
+              "properties": { "severity": "HIGH" }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "python.lang.security.audit.sqli.sqlalchemy-execute-raw-query",
+          "level": "error",
+          "message": { "text": "Unsanitized user input in raw SQL query. Use parameterized queries instead." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/db.py" },
+                "region": { "startLine": 42 }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
