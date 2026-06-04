@@ -1,38 +1,63 @@
-ShieldFlow AppSec Pipeline — Threat Model
-Document: Pipeline Threat Model
-Project: ShieldFlow AppSec Pipeline & SOAR Automation Platform
-Scope: CI/CD pipeline, scanner toolchain, SOAR ingestion layer, artifact storage, and notification channels
-Methodology: STRIDE (Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, Elevation of Privilege)
+# ShieldFlow AppSec Pipeline — Threat Model
 
-Threat Model Table
-#ThreatAttack ScenarioImpactMitigationComponent AffectedSTRIDE CategoryT-01Scanner bypassAn attacker with write access to the repository modifies .github/workflows/appsec.yml to comment out scanner jobs or lower severity thresholds, allowing vulnerable code to pass the gate undetected.Critical and high-severity vulnerabilities ship to production undetected. Pipeline provides false assurance of security.Protect the default branch with branch protection rules requiring at least one approving review for any workflow file change. Use CODEOWNERS to assign .github/workflows/ to a security team. Enable GitHub's required status checks so the gate job cannot be skipped.GitHub Actions workflow, Severity gate jobTampering, Elevation of PrivilegeT-02GitHub Actions workflow tamperingA malicious pull request modifies the workflow YAML to exfiltrate secrets via curl to an attacker-controlled server, or injects a compromised action version (e.g. uses: attacker/action@v1).All repository secrets (API keys, TheHive token, Slack webhook) exposed. Supply chain compromise of the pipeline itself.Pin all third-party actions to a specific commit SHA (uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683) rather than a mutable tag. Require pull request reviews from CODEOWNERS before merging workflow changes. Use permissions: blocks to apply least-privilege to each job. Enable GitHub Advanced Security secret scanning on the repo.GitHub Actions runner, repository secretsTampering, Information DisclosureT-03Secret leakage via logs or artifactsA developer accidentally prints an environment variable containing THEHIVE_API_KEY or SLACK_WEBHOOK_URL in a debug step. The value appears in the GitHub Actions log, which is readable by all repository contributors.SOAR platform fully compromised. Attacker can create, modify, or delete all TheHive cases. Slack workspace spammed or used for phishing.Never echo secrets in run steps. Use GitHub's built-in secret masking (secrets are masked in logs automatically when referenced via ${{ secrets.X }}). Rotate all secrets immediately if exposure is suspected. Store secrets in GitHub Environments with environment-level protection rules rather than repository-level secrets. Audit secret access via GitHub's secret scanning alerts.GitHub Secrets, Actions logs, TheHive API, Slack webhookInformation DisclosureT-04SARIF report manipulationAn attacker with runner access modifies a SARIF artifact after it is generated but before it is read by the gate job or uploaded to the GitHub Security tab, removing critical findings to make the pipeline pass.Vulnerabilities are silently removed from the gate evaluation. The Security tab shows a false-clean state. SOAR receives no alerts for real findings.Generate a SHA-256 hash of each SARIF file immediately after creation and record it as a workflow output. Verify the hash before reading the file in the gate job. Store SARIF artifacts with retention-days set and treat them as immutable. Use GitHub's native SARIF upload (codeql-action/upload-sarif) which records the upload event in the audit log.SARIF artifact storage, Severity gate job, GitHub Security tabTampering, RepudiationT-05Slack webhook exposureThe SLACK_WEBHOOK_URL secret is accidentally committed to the repository, printed in a log, or leaked via a third-party GitHub Action that logs all environment variables. The webhook is then used to send phishing messages to the security channel.Loss of trust in security notifications. Social engineering attacks against the security and development teams. Pipeline alerts ignored or suppressed.Store the webhook URL exclusively as a GitHub Secret, never in plaintext in the workflow YAML or any config file. Enable Slack webhook rate limiting and restrict the webhook to a specific channel. Rotate the webhook URL immediately if exposure is suspected. Use Slack's audit log to detect unexpected posting activity. Prefer Slack's OAuth bot token over incoming webhooks for production pipelines (supports token revocation).SOAR notification layer, Slack integrationInformation Disclosure, SpoofingT-06Dependency poisoning (supply chain attack)An attacker publishes a malicious version of a package that the target application depends on (e.g. a typosquatted npm package or a compromised maintainer account). Trivy may not yet have a CVE entry for a zero-day poisoned package.Malicious code executes in the application at runtime. The pipeline passes because no known CVE exists yet for the new malicious version.Enforce a lock file (package-lock.json, go.sum) and verify it is committed. Configure Trivy to fail on UNKNOWN severity as well as CRITICAL. Enable GitHub's Dependabot for automated dependency update PRs. Use npm audit signatures and npm pack --dry-run to verify package integrity. Subscribe to GitHub Advisory Database notifications for packages in use. Consider private package mirrors with allowlisting for production builds.SCA job (Trivy), application dependency treeTampering, Elevation of PrivilegeT-07False negative scans (scanner evasion)A developer (or attacker who has compromised a developer account) crafts a vulnerability that evades static analysis — for example, a multi-step SQL injection spread across several functions that Semgrep's inter-procedural analysis does not trace, or an obfuscated secret that Gitleaks' regex patterns do not match.A real vulnerability passes all scanner jobs, the gate approves the build, and the flaw ships to production undetected. The pipeline provides false confidence.Document and acknowledge the false-negative rate per tool (required project deliverable). Layer multiple scanner types so SAST, DAST, SCA, and secrets detection cover different attack surfaces. Run OWASP ZAP active scan (not just baseline) in a staging environment for deeper dynamic coverage. Schedule a manual penetration test or code review for high-risk modules. Add custom Semgrep rules for application-specific patterns. Track false-negative findings in TheHive as accepted risks with owner sign-off.SAST job, Secrets job, DAST job, Severity gateRepudiation (undetected risk acceptance)T-08Container image compromiseThe bkimminich/juice-shop:latest Docker image used as the DAST scan target is pulled fresh on each run. If the upstream image is compromised (e.g. Docker Hub account takeover), a malicious image runs inside the GitHub Actions runner with network access to other services.Malicious code executes on the runner. Secrets accessible via environment variables could be exfiltrated. The runner's GitHub token could be used to push malicious commits.Pin the container image to a specific digest rather than latest (e.g. bkimminich/juice-shop@sha256:abc123...). Run the DAST container with --network isolated or use GitHub Actions' built-in container network isolation. Trivy image scan (the SCA job) scans the same image for known vulnerabilities before it is used as a DAST target — treat a critical finding in the image scan as a blocker for the DAST job too. Use Docker Content Trust (DCT) to verify image signatures.DAST job, Docker image pull, GitHub Actions runnerTampering, Elevation of Privilege
+**Document:** Pipeline Threat Model
+**Project:** ShieldFlow AppSec Pipeline & SOAR Automation Platform
+**Scope:** CI/CD pipeline, scanner toolchain, SOAR ingestion layer, artifact storage, and notification channels
+**Methodology:** STRIDE (Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, Elevation of Privilege)
 
-Pipeline Attack Surface Summary
-Developer workstation
-        │  git push
-        ▼
-GitHub repository ──── branch protection ──── CODEOWNERS
+## Threat Model Table
+
+| ID   | Threat                 | Attack Scenario                                                      | Impact                                       | Mitigation                                                           | Component Affected                | STRIDE Category                   |
+| ---- | ---------------------- | -------------------------------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------- | --------------------------------- | --------------------------------- |
+| T-01 | Scanner bypass         | Attacker modifies workflow to disable scanners or reduce thresholds. | Vulnerabilities reach production.            | Branch protection, CODEOWNERS, required status checks.               | GitHub Actions workflow, Gate job | Tampering, Elevation of Privilege |
+| T-02 | Workflow tampering     | Malicious PR injects compromised actions or steals secrets.          | Secret exposure and supply-chain compromise. | Pin actions to commit SHA, code review, least privilege permissions. | GitHub Actions runner, secrets    | Tampering, Information Disclosure |
+| T-03 | Secret leakage         | API keys appear in logs or artifacts.                                | TheHive and Slack compromise.                | Secret masking, rotation, environment protection rules.              | GitHub Secrets, logs              | Information Disclosure            |
+| T-04 | SARIF manipulation     | Findings removed from SARIF before gate evaluation.                  | False clean security state.                  | Hash verification, immutable artifacts, SARIF upload auditing.       | SARIF artifacts, Gate job         | Tampering, Repudiation            |
+| T-05 | Slack webhook exposure | Webhook leaked through logs or source code.                          | Fake security alerts and phishing.           | Store as GitHub Secret, rotate if exposed.                           | Slack integration                 | Information Disclosure, Spoofing  |
+| T-06 | Dependency poisoning   | Malicious package enters dependency tree.                            | Runtime compromise.                          | Lock files, Dependabot, Trivy scanning.                              | SCA pipeline                      | Tampering, Elevation of Privilege |
+| T-07 | False negative scans   | Vulnerability bypasses scanner detection.                            | Vulnerability ships undetected.              | Layered security tools, manual review, custom rules.                 | SAST, DAST, Secrets scanning      | Repudiation                       |
+| T-08 | Container compromise   | Malicious Docker image used in pipeline.                             | Runner compromise and secret theft.          | Pin image digest, image scanning, signature verification.            | Docker image, DAST job            | Tampering, Elevation of Privilege |
+
+---
+
+## Pipeline Attack Surface Summary
+
+```text
+Developer Workstation
         │
         ▼
-GitHub Actions runner
-  ├── SAST job        (Semgrep)      ── SARIF artifact ──┐
-  ├── SCA job         (Trivy)        ── SARIF artifact ──┤
-  ├── Secrets job     (Gitleaks)     ── SARIF artifact ──┤──► Severity gate ──► Deploy / Block
-  └── DAST job        (OWASP ZAP)   ── SARIF artifact ──┘
-                                                          │
-                                                          ▼
-                                                   SOAR connector
-                                                          │
-                                                    TheHive API ──── Cortex (CVE enrichment)
-                                                          │
-                                                   Slack / Email
-Highest-risk components: GitHub Actions workflow file, repository secrets store, SARIF artifacts in transit between jobs.
-Lowest residual risk after mitigations: Slack webhook exposure (easily rotated), SARIF manipulation (hash verification).
-Accepted residual risk: False negatives from static analysis — mitigated by layered tooling and scheduled manual review, not eliminable by automation alone.
+GitHub Repository
+        │
+        ▼
+GitHub Actions Runner
+ ├── SAST (Semgrep)
+ ├── SCA (Trivy)
+ ├── Secrets (Gitleaks)
+ └── DAST (OWASP ZAP)
+        │
+        ▼
+Severity Gate
+        │
+   Deploy / Block
+        │
+        ▼
+SOAR Connector
+        │
+   TheHive / Cortex
+        │
+        ▼
+   Slack / Email
+```
 
-References
+### Key Risks
 
-OWASP CI/CD Security Top 10: https://owasp.org/www-project-top-10-ci-cd-security-risks/
-GitHub Actions security hardening: https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions
-STRIDE threat modelling methodology: https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats
-NIST SP 800-204C (DevSecOps): https://csrc.nist.gov/publications/detail/sp/800-204c/final
+* Highest Risk: GitHub Actions workflow files, repository secrets, SARIF artifacts.
+* Lowest Residual Risk: Slack webhook exposure, SARIF manipulation.
+* Accepted Residual Risk: False negatives from automated scanners.
+
+## References
+
+* OWASP CI/CD Security Top 10
+* GitHub Actions Security Hardening Guide
+* STRIDE Threat Modeling Methodology
+* NIST SP 800-204C (DevSecOps)
