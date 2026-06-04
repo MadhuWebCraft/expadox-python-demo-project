@@ -118,7 +118,11 @@ jobs:
           ignore-unfixed: false
           exit-code: 0          # gate job handles blocking
           list-all-pkgs: true
- 
+          
+      - name: Debug SARIF file
+        run: |
+           echo "Checking SARIF file..."
+           cat trivy-fs.sarif | head -50
       # Also scan the Juice Shop Docker image if you're using it as your target
       # Comment out if not using a container target
       - name: Run Trivy image scan (Juice Shop)
