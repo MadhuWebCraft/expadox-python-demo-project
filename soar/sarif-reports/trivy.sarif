@@ -1,1 +1,54 @@
-
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Trivy",
+          "rules": [
+            {
+              "id": "CVE-2023-44487",
+              "shortDescription": { "text": "HTTP/2 Rapid Reset Attack" },
+              "defaultConfiguration": { "level": "error" },
+              "properties": { "security-severity": "7.5" }
+            },
+            {
+              "id": "CVE-2024-21626",
+              "shortDescription": { "text": "Container escape via runc" },
+              "defaultConfiguration": { "level": "error" },
+              "properties": { "security-severity": "9.8" }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CVE-2023-44487",
+          "level": "error",
+          "message": { "text": "Package: golang.org/x/net, Installed: v0.15.0, Fixed: v0.17.0" },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "go.sum" },
+                "region": { "startLine": 88 }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "CVE-2024-21626",
+          "level": "error",
+          "message": { "text": "Package: runc, Installed: 1.1.9, Fixed: 1.1.12" },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "Dockerfile" },
+                "region": { "startLine": 1 }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
