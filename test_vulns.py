@@ -16,3 +16,6 @@ import os
 def run_command(user_input):
     os.system(user_input)
   
+import pickle
+
+pickle.loads(b"cos\nsystem\n(S'echo vulnerable'\ntR.")
