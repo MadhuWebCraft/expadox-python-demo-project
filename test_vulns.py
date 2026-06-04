@@ -8,6 +8,9 @@ AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
 AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 AWS_KEY = "AKIA_FAKE_KEY_123456"
 
+GITHUB_TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+DB_PASSWORD = "password123"
+
 # =========================
 # 🔑 HARDCODED CREDS
 # =========================
@@ -18,7 +21,7 @@ PASSWORD = "admin123"
 # 💥 SQL INJECTION (SAST)
 # =========================
 def login(username, password):
-    query = "SELECT * FROM users WHERE username = '%s' AND password = '%s'" % (username, password)
+    query = "SELECT * FROM users WHERE username = '" + username + "' AND password = '" + password + "'"
     return query
 
 
@@ -37,7 +40,7 @@ def ping_host():
     os.system("ping " + input("host: "))
 
 # =========================
-# ⚠️ DANGEROUS DESERIALIZATION
+# ⚠️ DESERIALIZATION VULNERABILITY
 # =========================
 def load_data(data):
     return pickle.loads(data)
@@ -47,3 +50,15 @@ def load_data(data):
 # =========================
 def execute_code(code):
     exec(code)
+
+# =========================
+# ⚠️ PATH TRAVERSAL STYLE INPUT
+# =========================
+def read_file(filename):
+    with open(filename, "r") as f:
+        return f.read()
+
+# =========================
+# ⚠️ XSS PAYLOAD (helps DAST context if used in web later)
+# =========================
+XSS_PAYLOAD = "<script>alert('XSS')</script>"
