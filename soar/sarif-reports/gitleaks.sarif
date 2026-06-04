@@ -1,1 +1,35 @@
-
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Gitleaks",
+          "rules": [
+            {
+              "id": "aws-access-token",
+              "shortDescription": { "text": "AWS Access Key detected" },
+              "defaultConfiguration": { "level": "error" },
+              "properties": { "severity": "CRITICAL" }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "aws-access-token",
+          "level": "error",
+          "message": { "text": "Possible secret: AWS Access Key in commit a3f9c12. Rotate immediately." },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "test_vulns.py" },
+                "region": { "startLine": 3 }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
