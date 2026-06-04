@@ -1,1 +1,94 @@
-
+{
+  "version": "2.1.0",
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "OWASP ZAP",
+          "version": "2.14.0",
+          "informationUri": "https://www.zaproxy.org/",
+          "rules": [
+            {
+              "id": "ZAP-10016",
+              "name": "Web Browser XSS Protection Not Enabled",
+              "shortDescription": { "text": "Web Browser XSS Protection Not Enabled" },
+              "fullDescription": { "text": "Web browser XSS protection is not enabled, or is disabled by the configuration of the X-XSS-Protection HTTP response header on the web server." },
+              "defaultConfiguration": { "level": "warning" },
+              "helpUri": "https://owasp.org/www-project-top-ten/2017/A7_2017-Cross-Site_Scripting_(XSS)",
+              "properties": { "tags": ["security", "dast", "owasp", "xss"] }
+            },
+            {
+              "id": "ZAP-10021",
+              "name": "X-Content-Type-Options Header Missing",
+              "shortDescription": { "text": "X-Content-Type-Options Header Missing" },
+              "fullDescription": { "text": "The Anti-MIME-Sniffing header X-Content-Type-Options was not set to 'nosniff'. This allows older versions of Internet Explorer and Chrome to perform MIME-sniffing on the response body." },
+              "defaultConfiguration": { "level": "note" },
+              "helpUri": "https://owasp.org/www-project-secure-headers/",
+              "properties": { "tags": ["security", "dast", "headers"] }
+            },
+            {
+              "id": "ZAP-10038",
+              "name": "Content Security Policy (CSP) Header Not Set",
+              "shortDescription": { "text": "Content Security Policy Header Not Set" },
+              "fullDescription": { "text": "Content Security Policy (CSP) is an added layer of security that helps to detect and mitigate certain types of attacks, including Cross Site Scripting (XSS) and data injection attacks." },
+              "defaultConfiguration": { "level": "warning" },
+              "helpUri": "https://owasp.org/www-project-top-ten/2017/A7_2017-Cross-Site_Scripting_(XSS)",
+              "properties": { "tags": ["security", "dast", "owasp", "csp"] }
+            },
+            {
+              "id": "ZAP-40012",
+              "name": "Cross Site Scripting (Reflected)",
+              "shortDescription": { "text": "Cross Site Scripting (Reflected)" },
+              "fullDescription": { "text": "Cross-site Scripting (XSS) is an attack technique that involves echoing attacker-supplied code into a user's browser instance. A browser instance can be a standard web browser client, or a browser object embedded in a software product." },
+              "defaultConfiguration": { "level": "error" },
+              "helpUri": "https://owasp.org/www-project-top-ten/2017/A7_2017-Cross-Site_Scripting_(XSS)",
+              "properties": { "tags": ["security", "dast", "owasp", "xss"], "security-severity": "7.2" }
+            },
+            {
+              "id": "ZAP-90034",
+              "name": "Cloud Metadata Potentially Exposed",
+              "shortDescription": { "text": "Cloud Metadata Potentially Exposed" },
+              "fullDescription": { "text": "The Cloud Metadata Attack attempts to abuse a misconfigured NGINX server in order to access the instance metadata maintained by cloud service providers." },
+              "defaultConfiguration": { "level": "error" },
+              "helpUri": "https://owasp.org/www-project-web-security-testing-guide/",
+              "properties": { "tags": ["security", "dast", "cloud"], "security-severity": "9.1" }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "ZAP-40012",
+          "level": "error",
+          "message": { "text": "Reflected XSS attack confirmed. Parameter 'q' on search endpoint echoes unsanitized input into the HTML response. Payload: <script>alert(1)</script>. Verify and apply output encoding." },
+          "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "http://localhost:3000/rest/products/search?q=test" }, "region": { "startLine": 1 } } }]
+        },
+        {
+          "ruleId": "ZAP-10038",
+          "level": "warning",
+          "message": { "text": "Content Security Policy (CSP) header is not set on http://localhost:3000. Without CSP, the browser has no policy to restrict resource loading, increasing XSS impact." },
+          "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "http://localhost:3000/" }, "region": { "startLine": 1 } } }]
+        },
+        {
+          "ruleId": "ZAP-10016",
+          "level": "warning",
+          "message": { "text": "X-XSS-Protection header is not set or is set to '0' on http://localhost:3000/api/users. This disables the browser's built-in XSS filter." },
+          "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "http://localhost:3000/api/users" }, "region": { "startLine": 1 } } }]
+        },
+        {
+          "ruleId": "ZAP-10021",
+          "level": "note",
+          "message": { "text": "X-Content-Type-Options header missing from http://localhost:3000/assets/public/. Set 'nosniff' to prevent MIME-type sniffing attacks." },
+          "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "http://localhost:3000/assets/public/" }, "region": { "startLine": 1 } } }]
+        },
+        {
+          "ruleId": "ZAP-90034",
+          "level": "error",
+          "message": { "text": "Cloud metadata endpoint may be exposed via SSRF. The application made a request to http://169.254.169.254/latest/meta-data/ which returned a 200 response. An attacker could use this to extract cloud instance credentials." },
+          "locations": [{ "physicalLocation": { "artifactLocation": { "uri": "http://localhost:3000/api/products/reviews" }, "region": { "startLine": 1 } } }]
+        }
+      ]
+    }
+  ]
+}
