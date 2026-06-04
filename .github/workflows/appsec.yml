@@ -106,6 +106,9 @@ jobs:
  
       # Scan the repo filesystem — reads package-lock.json, requirements.txt,
       # go.sum, Gemfile.lock, etc. and checks against NVD + GitHub Advisory DB
+      - name: Clean old SARIF
+        run: rm -f trivy-fs.sarif
+        
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -118,7 +121,15 @@ jobs:
           ignore-unfixed: false
           exit-code: 0          # gate job handles blocking
           list-all-pkgs: true
-          
+          cache: false
+
+      - name: Validate SARIF file
+        run: |
+         echo "First 20 lines:"
+         head -20 trivy-fs.sarif
+         echo "Checking JSON validity..."
+         python -m json.tool trivy-fs.sarif > /dev/null
+         
       - name: Debug SARIF file
         run: |
            echo "Checking SARIF file..."
