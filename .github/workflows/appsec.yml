@@ -279,13 +279,15 @@ jobs:
       # Baseline scan — passive only, no active attack (safe for shared envs)
       # For a more thorough scan replace with zaproxy/action-full-scan
       - name: Run ZAP baseline scan
-        uses: zaproxy/action-baseline@v0.12.0
+        uses: zaproxy/action-baseline@v0.14.0
         with:
           target: http://localhost:3000
           rules_file_name: .zap/rules.tsv    # optional: suppress known FPs
-          cmd_options: "-J zap-report.json -w zap-report.md -a"
+          cmd_options: >
+             -J zap-report.json
+             -w zap-report.md
+          
           fail_action: false                  # gate job handles blocking
-          allow_issue_writing: false
  
       # Convert ZAP JSON report to SARIF
       - name: Convert ZAP report to SARIF
