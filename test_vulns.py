@@ -1,28 +1,49 @@
-# Fake AWS Secret (Gitleaks)
+import os
+import pickle
+
+# =========================
+# 🔐 FAKE SECRETS (GITLEAKS)
+# =========================
 AWS_ACCESS_KEY_ID = "AKIAIOSFODNN7EXAMPLE"
 AWS_SECRET_ACCESS_KEY = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+AWS_KEY = "AKIA_FAKE_KEY_123456"
 
-# Hardcoded credentials (SAST)
+# =========================
+# 🔑 HARDCODED CREDS
+# =========================
 USERNAME = "admin"
 PASSWORD = "admin123"
 
-# SQL Injection (strong SAST pattern)
+# =========================
+# 💥 SQL INJECTION (SAST)
+# =========================
 def login(username, password):
     query = "SELECT * FROM users WHERE username = '%s' AND password = '%s'" % (username, password)
     return query
 
-# Command injection (SAST)
-import os
 
+def get_user(user_id):
+    query = "SELECT * FROM users WHERE id = " + user_id
+    return query
+
+# =========================
+# 💣 COMMAND INJECTION
+# =========================
 def run_command(cmd):
     os.system("bash -c " + cmd)
 
-# Dangerous deserialization (sometimes high severity)
-import pickle
 
+def ping_host():
+    os.system("ping " + input("host: "))
+
+# =========================
+# ⚠️ DANGEROUS DESERIALIZATION
+# =========================
 def load_data(data):
     return pickle.loads(data)
 
-# Dangerous dynamic execution (high-risk pattern)
+# =========================
+# ⚠️ DANGEROUS DYNAMIC EXEC
+# =========================
 def execute_code(code):
     exec(code)
