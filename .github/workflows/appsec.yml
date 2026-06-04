@@ -283,7 +283,7 @@ jobs:
         with:
           target: http://localhost:3000
           rules_file_name: .zap/rules.tsv    # optional: suppress known FPs
-          cmd_options: cmd_options: "-J zap-report.json -w zap-report.md -a"
+          cmd_options: "-J zap-report.json -w zap-report.md -a"
           fail_action: false                  # gate job handles blocking
           allow_issue_writing: false
  
